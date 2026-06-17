@@ -126,6 +126,7 @@ select{padding:7px 10px;border-radius:8px;border:1px solid #D3D1C7;font-size:13p
 </style>
   
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script src="https://cdn.sheetjs.com/xlsx-latest/package/dist/xlsx.full.min.js"></script>
 </head>
 <body>
 
@@ -279,7 +280,12 @@ select{padding:7px 10px;border-radius:8px;border:1px solid #D3D1C7;font-size:13p
       <select id="class-filter" onchange="renderStudentList()"></select>
       <span id="stu-count" style="font-size:13px;color:#888780"></span>
     </div>
-    <button class="btn-primary" onclick="openAddModal()">+ เพิ่มนักเรียน</button>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+      <input type="file" id="excel-input" accept=".xlsx,.xls,.csv" style="display:none" onchange="handleExcelUpload(event)">
+      <button class="btn-print" onclick="downloadStudentTemplate()" style="background:#fff;border-color:#1D9E75;color:#0F6E56">📥 ดาวน์โหลดเทมเพลต Excel</button>
+      <button class="btn-print" onclick="document.getElementById('excel-input').click()" style="background:#fff;border-color:#185FA5;color:#185FA5">📤 นำเข้า Excel</button>
+      <button class="btn-primary" onclick="openAddModal()">+ เพิ่มนักเรียน</button>
+    </div>
   </div>
   <div id="student-list"></div>
 </div>
@@ -313,6 +319,7 @@ select{padding:7px 10px;border-radius:8px;border:1px solid #D3D1C7;font-size:13p
 <script>
 const CLASSES = ['อนุบาล 1','อนุบาล 2','อนุบาล 3','ป.1','ป.2','ป.3','ป.4','ป.5','ป.6'];
 const STATUS = ['มา', 'ขาด', 'ลา'];
+const CURRENT_YEAR = new Date().getFullYear() + 543;
 
 let students = [];
 let attendance = {}; 
@@ -354,11 +361,17 @@ window.initFirebaseSystem = function() {
 }
 
 function todayStr(){
-  return new Date().toISOString().slice(0,10);
+  const now = new Date();
+  return now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2,'0') + '-' + String(now.getDate()).padStart(2,'0');
 }
 
 function getAtt(date, sid){
   return (attendance[date] && attendance[date][sid]) || '';
+}
+
+function getAttDefault(date, sid){
+  const st = getAtt(date, sid);
+  return st || 'มา';
 }
 
 async function markAtt(e, date, sid, status){
@@ -539,7 +552,7 @@ function renderAttendance(){
   let counts = {มา:0,ขาด:0,ลา:0};
   let total = students.length;
   students.forEach(s => {
-    const st = getAtt(date, s.id);
+    const st = getAttDefault(date, s.id);
     if(counts[st] !== undefined) counts[st]++;
   });
 
@@ -548,24 +561,6 @@ document.getElementById('att-summary').innerHTML = `
     <div class="sum-card"><div class="sum-label" style="color:#0F6E56">✅ มาเรียน</div><div class="sum-val" style="color:#0F6E56">${counts['มา']}</div><div class="sum-sub">คน</div></div>
     <div class="sum-card"><div class="sum-label" style="color:#A32D2D">❌ ขาดเรียน</div><div class="sum-val" style="color:#A32D2D">${counts['ขาด']}</div><div class="sum-sub">คน</div></div>
     <div class="sum-card"><div class="sum-label" style="color:#185FA5">🏥 ลา</div><div class="sum-val" style="color:#185FA5">${counts['ลา']}</div><div class="sum-sub">คน</div></div>
-    <div class="sum-card"><div class="sum-label" style="color:#888780">ยังไม่เช็ค</div><div class="sum-val" style="color:#888780">${total - counts['มา'] - counts['ขาด'] - counts['ลา']}</div><div class="sum-sub">คน</div></div>
-  `;
-
-  // ปุ่มทุกคนมา (รวมทุกชั้น)
-  const allUnmarked = students.filter(s => !getAtt(date, s.id)).length;
-  const summaryEl2 = document.getElementById('att-summary');
-  let allPresentBar = document.getElementById('all-present-bar');
-  if(!allPresentBar) {
-    allPresentBar = document.createElement('div');
-    allPresentBar.id = 'all-present-bar';
-    allPresentBar.style.cssText = 'margin-bottom:14px;display:flex;gap:8px;flex-wrap:wrap;align-items:center';
-    summaryEl2.insertAdjacentElement('afterend', allPresentBar);
-  }
-  allPresentBar.innerHTML = `
-    <button class="btn-primary" onclick="markAllPresent('${date}', null)" style="font-size:13px;display:flex;align-items:center;gap:6px">
-      ✅ ทุกคนมาทั้งโรงเรียน
-    </button>
-    <span style="font-size:12px;color:#888780">ยังไม่เช็ค ${allUnmarked} คน</span>
   `;
 
   let html = '';
@@ -573,9 +568,8 @@ document.getElementById('att-summary').innerHTML = `
     const ss = byClass[cls];
     if(!ss || !ss.length) return;
     const c2 = {มา:0,ขาด:0,ลา:0};
-    ss.forEach(s => { const st = getAtt(date, s.id); if(c2[st] !== undefined) c2[st]++; });
+    ss.forEach(s => { const st = getAttDefault(date, s.id); if(c2[st] !== undefined) c2[st]++; });
     const safeId = 'cls-' + cls.replace(/\s/g,'_');
-    const safeCls = cls.replace(/'/g,"\\'");
     html += `
     <div class="class-card">
       <div class="class-header" onclick="toggleCls('${safeId}',this)">
@@ -586,7 +580,6 @@ document.getElementById('att-summary').innerHTML = `
             <span class="stat-badge s-red">ขาด ${c2['ขาด']}</span>
             <span class="stat-badge s-blue">ลา ${c2['ลา']}</span>
           </div>
-          <button onclick="event.stopPropagation();markAllPresent('${date}','${safeCls}')" style="padding:3px 10px;border-radius:99px;border:1px solid #5DCAA5;background:#E1F5EE;color:#0F6E56;font-size:11px;font-family:'Sarabun',sans-serif;cursor:pointer;font-weight:600;white-space:nowrap">✅ ทุกคนมา</button>
           <span class="toggle-btn" id="${safeId}-arrow">▼</span>
         </div>
       </div>
@@ -595,7 +588,7 @@ document.getElementById('att-summary').innerHTML = `
           <thead><tr><th style="width:36px">#</th><th>ชื่อ-นามสกุล</th><th style="width:60px">เพศ</th><th>สถานะ</th></tr></thead>
           <tbody>
             ${ss.map((s,i) => {
-              const cur = getAtt(date, s.id);
+              const cur = getAttDefault(date, s.id);
               return `<tr>
                 <td style="color:#888780;text-align:center">${i+1}</td>
                 <td>${s.name}</td>
@@ -624,19 +617,6 @@ function toggleCls(id, header){
   if(arrow) arrow.textContent = hidden ? '▼' : '▶';
 }
 
-async function markAllPresent(date, cls) {
-  const targets = cls ? students.filter(s => s.cls === cls) : students;
-  if(!targets.length) return;
-  if(!attendance[date]) attendance[date] = {};
-  targets.forEach(s => { attendance[date][s.id] = 'มา'; });
-  renderAttendance();
-  showSaveNotice();
-  try {
-    await window.fbSetDoc(window.fbDoc(window.db, "school_data", "attendance_records"), { records: attendance });
-    showToast(cls ? `✅ ทำเครื่องหมาย "${cls}" ทุกคนมาแล้ว` : '✅ ทำเครื่องหมายทุกคนมาแล้ว');
-  } catch(err) { console.error(err); }
-}
-
 let myChart = null; // ตัวแปรเก็บสถานะกราฟ ป้องกันกราฟซ้อน
 
 function renderReport(){
@@ -649,6 +629,10 @@ function renderReport(){
   let tM=0, tF=0, tAll=0;
   let tMam=0, tMaf=0, tMa=0;
   let tKhad=0, tLa=0, tKhadLa=0;
+
+  const chartLabels = [];
+  const chartPresent = [];
+  const chartAbsent = [];
 
   // อาเรย์สำหรับเก็บข้อมูลรายชื่อนักเรียนที่ขาดและลาในวันนี้
   let absentList = [];
@@ -665,7 +649,7 @@ function renderReport(){
     
     // วนลูปเช็คชื่อนักเรียนทีละคนในห้อง
     ss.forEach((s, idx) => {
-      const st = getAtt(date, s.id);
+      const st = getAttDefault(date, s.id);
       if(st==='มา'){ 
         if(s.gender==='ชาย') ma_m++; else ma_f++; 
       } else if(st==='ขาด') {
@@ -693,6 +677,9 @@ function renderReport(){
     
     tM+=males.length; tF+=females.length; tAll+=ss.length;
     tMam+=ma_m; tMaf+=ma_f; tMa+=ma; tKhad+=khad; tLa+=la; tKhadLa+=khad_la;
+    chartLabels.push(cls);
+    chartPresent.push(ss.length ? Math.round((ma / ss.length) * 100) : 0);
+    chartAbsent.push(ss.length ? Math.round(((khad + la) / ss.length) * 100) : 0);
     
     rows += `<tr>
       <td class="class-col">${cls}</td>
@@ -817,14 +804,12 @@ function renderReport(){
     </div>
   `;
 
-  // เรียกฟังก์ชันวาดกราฟแท่งสรุป (สำหรับหน้ารายงานเว็บ)
-// เรียกฟังก์ชันวาดกราฟแท่งสรุป (สำหรับหน้ารายงานเว็บ)
   if(typeof generateChart === 'function') {
-     generateChart(subAnuban, subPrathom);
+     generateChart(chartLabels, chartPresent, chartAbsent);
   }
 }
 
-function generateChart(anuban, prathom) {
+function generateChart(labels, presentData, absentData) {
   const ctx = document.getElementById('attendanceChart').getContext('2d');
   
   // ล้างอินสแตนซ์กราฟเดิมก่อนหน้าเพื่อป้องกันการแสดงซ้อนทับกันเมื่อเปลี่ยนวันที่
@@ -835,21 +820,23 @@ function generateChart(anuban, prathom) {
   myChart = new Chart(ctx, {
     type: 'bar',
     data: {
-      labels: ['ช่วงชั้นอนุบาล (อ.1 - อ.3)', 'ช่วงชั้นประถมศึกษา (ป.1 - ป.6)'],
+      labels: labels,
       datasets: [
         {
-          label: 'มาเรียน (คน)',
-          data: [anuban.ma_total, prathom.ma_total],
-          backgroundColor: '#1D9E75',
-          borderColor: '#0F6E56',
-          borderWidth: 1
+          label: 'มา',
+          data: presentData,
+          backgroundColor: '#1D4ED8',
+          borderColor: '#1D4ED8',
+          borderWidth: 1,
+          stack: 'Stack 0'
         },
         {
-          label: 'รวมขาด/ลา (คน)',
-          data: [anuban.khad_la, prathom.khad_la],
-          backgroundColor: '#F09995',
-          borderColor: '#A32D2D',
-          borderWidth: 1
+          label: 'ขาด',
+          data: absentData,
+          backgroundColor: '#DC2626',
+          borderColor: '#DC2626',
+          borderWidth: 1,
+          stack: 'Stack 0'
         }
       ]
     },
@@ -863,16 +850,19 @@ function generateChart(anuban, prathom) {
         },
         title: {
           display: true,
-          text: 'แผนภูมิสรุปยอดการมาเรียนแยกตามช่วงชั้น',
+          text: 'สัดส่วนมา / ขาด แยกตามชั้นเรียน',
           font: { family: 'Sarabun', size: 14, weight: 'bold' }
         }
       },
       scales: {
         y: {
           beginAtZero: true,
-          ticks: { font: { family: 'Sarabun' }, stepSize: 5 }
+          max: 100,
+          stacked: true,
+          ticks: { font: { family: 'Sarabun' }, callback: value => value + '%' }
         },
         x: {
+          stacked: true,
           ticks: { font: { family: 'Sarabun', weight: 'bold' } }
         }
       }
@@ -1039,6 +1029,12 @@ function initSelects(){
   document.getElementById('s-class').innerHTML = opts;
   document.getElementById('class-filter').innerHTML = `<option value="">ทุกชั้นเรียน</option>` + opts;
   document.getElementById('stat-class').innerHTML = `<option value="">ทุกชั้นเรียน</option>` + opts;
+
+  const yearOptions = [CURRENT_YEAR - 1, CURRENT_YEAR, CURRENT_YEAR + 1]
+    .map(y => `<option value="${y}">${y}</option>`)
+    .join('');
+  document.getElementById('stat-year').innerHTML = yearOptions;
+  document.getElementById('stat-year').value = CURRENT_YEAR;
 }
 
 // ============ RANGE PRINT ============
@@ -1284,8 +1280,12 @@ function exportReportExcel() {
   const date = document.getElementById('rep-date').value || todayStr();
   const thDate = new Date(date+'T00:00:00').toLocaleDateString('th-TH',{weekday:'long',year:'numeric',month:'long',day:'numeric'});
 
-  let csv = `\uFEFFรายงานการมาเรียน โรงเรียนบ้านรัตนะ\nวันที่,${thDate}\n\n`;
-  csv += `ชั้น,ชาย,หญิง,รวม,มา(ชาย),มา(หญิง),มา(รวม),ขาด,ลา,รวมขาด/ลา,มา%\n`;
+  const wsData = [
+    ['รายงานการมาเรียน โรงเรียนบ้านรัตนะ'],
+    ['วันที่', thDate],
+    [],
+    ['ชั้น', 'ชาย', 'หญิง', 'รวม', 'มา(ชาย)', 'มา(หญิง)', 'มา(รวม)', 'ขาด', 'ลา', 'รวมขาด/ลา', 'มา%']
+  ];
 
   CLASSES.forEach(cls => {
     const ss = students.filter(s => s.cls === cls);
@@ -1293,29 +1293,33 @@ function exportReportExcel() {
     const females = ss.filter(s => s.gender==='หญิง').length;
     let mam=0, maf=0, khad=0, la=0;
     ss.forEach(s => {
-      const st = getAtt(date, s.id);
+      const st = getAttDefault(date, s.id);
       if(st==='มา'){ if(s.gender==='ชาย') mam++; else maf++; }
       else if(st==='ขาด') khad++;
       else if(st==='ลา') la++;
     });
     const ma = mam+maf;
     const pct = ss.length > 0 ? ((ma/ss.length)*100).toFixed(1) : '0.0';
-    csv += `${cls},${males},${females},${ss.length},${mam},${maf},${ma},${khad},${la},${khad+la},${pct}%\n`;
+    wsData.push([cls, males, females, ss.length, mam, maf, ma, khad, la, khad+la, `${pct}%`]);
   });
 
-  // รายชื่อขาด/ลา
-  csv += `\nรายชื่อนักเรียนที่ไม่มาเรียน\nที่,ชั้น,เลขที่,ชื่อ-นามสกุล,สถานะ\n`;
+  wsData.push([]);
+  wsData.push(['รายชื่อนักเรียนที่ไม่มาเรียน']);
+  wsData.push(['ที่', 'ชั้น', 'เลขที่', 'ชื่อ-นามสกุล', 'สถานะ']);
   let no = 1;
   CLASSES.forEach(cls => {
     students.filter(s => s.cls === cls).forEach((s,i) => {
       const st = getAtt(date, s.id);
       if(st === 'ขาด' || st === 'ลา') {
-        csv += `${no++},${cls},${i+1},${s.name},${st==='ขาด'?'ขาดเรียน':'ลา'}\n`;
+        wsData.push([no++, cls, i+1, s.name, st==='ขาด' ? 'ขาดเรียน' : 'ลา']);
       }
     });
   });
 
-  downloadCSV(csv, `รายงาน_${date}.csv`);
+  const worksheet = XLSX.utils.aoa_to_sheet(wsData);
+  const workbook = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(workbook, worksheet, 'รายงาน');
+  XLSX.writeFile(workbook, `รายงาน_${date}.xlsx`);
 }
 
 function exportStatsExcel() {
@@ -1339,8 +1343,13 @@ function exportStatsExcel() {
   const recorded = dateKeys.filter(d => attendance[d]);
   const filtered = clsFilter ? students.filter(s => s.cls === clsFilter) : students;
 
-  let csv = `\uFEFFสถิติการมาเรียน โรงเรียนบ้านรัตนะ\nปีการศึกษา,${year}\nวันที่มีข้อมูล,${recorded.length} วัน\n\n`;
-  csv += `ที่,ชื่อ-นามสกุล,ชั้น,เพศ,มา(วัน),ลา(วัน),ขาด(วัน),วันทั้งหมด,มา%\n`;
+  const wsData = [
+    ['สถิติการมาเรียน โรงเรียนบ้านรัตนะ'],
+    ['ปีการศึกษา', year],
+    ['วันที่มีข้อมูล', `${recorded.length} วัน`],
+    [],
+    ['ที่','ชื่อ-นามสกุล','ชั้น','เพศ','มา(วัน)','ลา(วัน)','ขาด(วัน)','วันทั้งหมด','มา%']
+  ];
 
   filtered.forEach((s,i) => {
     let ma=0,la=0,khad=0;
@@ -1350,10 +1359,13 @@ function exportStatsExcel() {
     });
     const total = ma+la+khad;
     const pct = total>0?((ma/total)*100).toFixed(1):'–';
-    csv += `${i+1},${s.name},${s.cls},${s.gender},${ma},${la},${khad},${recorded.length},${pct}${pct!=='–'?'%':''}\n`;
+    wsData.push([i+1, s.name, s.cls, s.gender, ma, la, khad, recorded.length, pct === '–' ? pct : `${pct}%`]);
   });
 
-  downloadCSV(csv, `สถิติ_${year}_${term}.csv`);
+  const worksheet = XLSX.utils.aoa_to_sheet(wsData);
+  const workbook = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(workbook, worksheet, 'สถิติ');
+  XLSX.writeFile(workbook, `สถิติ_${year}_${term}.xlsx`);
 }
 
 function downloadCSV(csv, filename) {
@@ -1365,19 +1377,109 @@ function downloadCSV(csv, filename) {
   showToast(`📥 ดาวน์โหลด ${filename} แล้ว`);
 }
 
+function downloadStudentTemplate() {
+  const header = ['name', 'gender', 'class'];
+  const example = ['เช่น เด็กชาย สมชาย ใจดี', 'ชาย', 'ป.1'];
+  const worksheet = XLSX.utils.aoa_to_sheet([header, example]);
+  const workbook = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(workbook, worksheet, 'template');
+  XLSX.writeFile(workbook, 'template_students.xlsx');
+}
+
+function handleExcelUpload(event) {
+  const file = event.target.files && event.target.files[0];
+  if(!file) return;
+  const reader = new FileReader();
+  reader.onload = async (e) => {
+    try {
+      const data = new Uint8Array(e.target.result);
+      const workbook = XLSX.read(data, { type: 'array' });
+      const sheet = workbook.Sheets[workbook.SheetNames[0]];
+      const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
+      await importStudentsFromRows(rows);
+    } catch (err) {
+      console.error(err);
+      showToast('❌ ไม่สามารถอ่านไฟล์ Excel ได้');
+    }
+  };
+  reader.readAsArrayBuffer(file);
+  event.target.value = '';
+}
+
+async function importStudentsFromRows(rows) {
+  if(!rows || rows.length < 2) {
+    showToast('❌ ไฟล์ไม่มีข้อมูลนักเรียน');
+    return;
+  }
+
+  const headers = rows[0].map(h => String(h || '').trim().toLowerCase());
+  const nameIdx = headers.findIndex(h => ['name','ชื่อ','ชื่อ-นามสกุล'].includes(h));
+  const genderIdx = headers.findIndex(h => ['gender','เพศ'].includes(h));
+  const classIdx = headers.findIndex(h => ['class','ชั้น'].includes(h));
+
+  if(nameIdx === -1 || classIdx === -1) {
+    showToast('❌ คอลัมน์ต้องมีชื่อ/ชื่อ-นามสกุล และ ชั้น');
+    return;
+  }
+
+  const genderMap = {
+    'ชาย': 'ชาย', 'male': 'ชาย', 'm': 'ชาย',
+    'หญิง': 'หญิง', 'female': 'หญิง', 'f': 'หญิง'
+  };
+
+  const added = [];
+  const skipped = [];
+  rows.slice(1).forEach((row, idx) => {
+    const name = String(row[nameIdx] || '').trim();
+    const cls = String(row[classIdx] || '').trim();
+    if(!name || !cls) {
+      skipped.push(idx + 2);
+      return;
+    }
+    if(!CLASSES.includes(cls)) {
+      skipped.push(idx + 2);
+      return;
+    }
+    const rawGender = String(row[genderIdx] || '').trim().toLowerCase();
+    const gender = genderMap[rawGender] || 'ชาย';
+    const exists = students.some(s => s.name === name && s.cls === cls && s.gender === gender);
+    if(exists) {
+      skipped.push(idx + 2);
+      return;
+    }
+    added.push({ id: 's' + Date.now() + Math.floor(Math.random() * 1000), name, gender, cls });
+  });
+
+  if(added.length === 0) {
+    showToast('⚠️ ไม่พบข้อมูลนักเรียนใหม่ในไฟล์');
+    return;
+  }
+
+  students = students.concat(added);
+  renderStudentList();
+  await window.fbSetDoc(window.fbDoc(window.db, "school_data", "students_list"), { list: students });
+  showToast(`✅ เพิ่มนักเรียนใหม่ ${added.length} คน`);
+  if(skipped.length > 0) {
+    console.warn('Skipped rows:', skipped);
+  }
+}
+
 // ============ TIMELINE ประวัติรายคน ============
 function openTimeline(sid) {
   const s = students.find(x => x.id === sid);
   if(!s) return;
 
-  // รวบรวมวันที่ทั้งหมดที่มีข้อมูลของนักเรียนคนนี้
+  // รวบรวมวันที่ที่ขาดหรือลา ของนักเรียนคนนี้
   const days = Object.keys(attendance)
-    .filter(d => attendance[d] && attendance[d][sid])
+    .filter(d => {
+      const st = attendance[d] && attendance[d][sid];
+      return st === 'ขาด' || st === 'ลา';
+    })
     .sort((a,b) => b.localeCompare(a)); // เรียงล่าสุดก่อน
 
   let timelineHTML = '';
   if(days.length === 0) {
-    timelineHTML = '<div style="text-align:center;color:#888780;padding:24px;font-size:13px">ยังไม่มีข้อมูลการเช็คชื่อ</div>';
+    timelineHTML = '<div style="text-align:center;color:#888780;padding:24px;font-size:13px">ยังไม่มีข้อมูลวันที่ขาดหรือลา</div>';
   } else {
     const statusConfig = {
       'มา': {bg:'#E1F5EE',color:'#0F6E56',dot:'#1D9E75',icon:'✅'},
@@ -1386,14 +1488,14 @@ function openTimeline(sid) {
       'สาย': {bg:'#FAEEDA',color:'#854F0B',dot:'#854F0B',icon:'⏰'},
     };
 
-    // สรุปสถิติ
-    let ma=0,la=0,khad=0;
+    // สรุปสถิติเฉพาะขาด/ลา
+    let la=0,khad=0;
     days.forEach(d => {
       const st = attendance[d][sid];
-      if(st==='มา') ma++; else if(st==='ลา') la++; else if(st==='ขาด') khad++;
+      if(st==='ลา') la++; else if(st==='ขาด') khad++;
     });
-    const total = ma+la+khad;
-    const pct = total>0?((ma/total)*100).toFixed(1):'–';
+    const total = la+khad;
+    const pct = total>0?((khad/total)*100).toFixed(1):'–';
 
     // จัดกลุ่มตามเดือน
     const byMonth = {};
@@ -1426,11 +1528,7 @@ function openTimeline(sid) {
     });
 
     timelineHTML = `
-      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:16px">
-        <div style="text-align:center;background:#E1F5EE;border-radius:8px;padding:10px 4px">
-          <div style="font-size:20px;font-weight:700;color:#0F6E56">${ma}</div>
-          <div style="font-size:11px;color:#0F6E56">มา</div>
-        </div>
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:16px">
         <div style="text-align:center;background:#FCEBEB;border-radius:8px;padding:10px 4px">
           <div style="font-size:20px;font-weight:700;color:#A32D2D">${khad}</div>
           <div style="font-size:11px;color:#A32D2D">ขาด</div>
@@ -1440,8 +1538,8 @@ function openTimeline(sid) {
           <div style="font-size:11px;color:#185FA5">ลา</div>
         </div>
         <div style="text-align:center;background:#F1EFE8;border-radius:8px;padding:10px 4px">
-          <div style="font-size:20px;font-weight:700;color:#0F6E56">${pct}${pct!=='–'?'%':''}</div>
-          <div style="font-size:11px;color:#888780">มา%</div>
+          <div style="font-size:20px;font-weight:700;color:#0F6E56">${total}</div>
+          <div style="font-size:11px;color:#888780">รวม</div>
         </div>
       </div>
       <div style="max-height:360px;overflow-y:auto;padding-right:4px">${tlHTML}</div>`;
